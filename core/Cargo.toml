@@ -1,0 +1,9 @@
+[package]
+name = "ezkey-core"
+version = "0.1.0"
+edition = "2021"
+description = "Telex Vietnamese input engine"
+
+[lib]
+name = "ezkey_core"
+crate-type = ["rlib", "staticlib"]
