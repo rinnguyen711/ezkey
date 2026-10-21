@@ -7,6 +7,13 @@ name = "ezkey-core"
 version = "0.1.0"
 
 [[package]]
+name = "ezkey-setup"
+version = "0.1.0"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
 name = "ezkey-win"
 version = "0.1.0"
 dependencies = [

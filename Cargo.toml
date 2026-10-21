@@ -1,6 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["core", "windows"]
+members = ["core", "windows", "installer"]
+# The installer embeds target/release/ezkey.exe, so it is built separately
+# after ezkey-win (see README).
+default-members = ["core", "windows"]
 
 [profile.release]
 opt-level = 3

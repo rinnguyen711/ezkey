@@ -66,6 +66,24 @@ Muốn gõ được trong các app chạy quyền Administrator thì ezkey cũng
 - Tắt mục này thì từ lần mở sau ezkey chạy lại với quyền thường.
 - Khi ezkey đang chạy quyền admin, chú thích của biểu tượng ở khay có chữ `[Admin]`.
 
+### Bộ cài đặt
+
+```
+cargo build --release -p ezkey-win
+cargo build --release -p ezkey-setup
+```
+
+Lệnh trên tạo ra `target\release\ezkey-setup.exe`. Đây là một file duy nhất, có sẵn `ezkey.exe` bên trong, nên có thể gửi cho người khác. Bộ cài:
+
+- cài ezkey cho tài khoản đang dùng vào `%LOCALAPPDATA%\Programs\ezkey`, không cần quyền Administrator;
+- thêm ezkey vào Start menu và vào Settings → Apps, để gỡ cài đặt như mọi app khác;
+- hỏi bạn có muốn khởi động ezkey cùng Windows không, rồi mở ezkey luôn;
+- nếu ezkey đang chạy, tự đóng nó trước khi cài đè (bản đang chạy quyền Admin thì bạn cần tự thoát từ khay).
+
+Khi gỡ cài đặt, cài đặt của bạn trong `HKCU\Software\ezkey` vẫn được giữ lại.
+
+Chạy không hiện hộp thoại (dùng cho script): `ezkey-setup.exe --quiet [--autostart] [--no-launch] [--dir <thư mục>]`. Để gỡ: `uninstall.exe --uninstall --quiet`.
+
 ## macOS
 
 Cần Xcode Command Line Tools và Rust.
