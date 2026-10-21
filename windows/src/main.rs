@@ -1,10 +1,12 @@
 //! ezkey for Windows: a tray app that rewrites keystrokes with a low-level
-//! keyboard hook. A hotkey (Ctrl+Shift by default) or a click on the tray
-//! icon toggles Vietnamese / English, optionally remembered per app.
+//! keyboard hook. A hotkey (Ctrl+Shift by default, user-definable) or a
+//! click on the tray icon toggles Vietnamese / English, optionally
+//! remembered per app.
 
 #![windows_subsystem = "windows"]
 
 mod apps;
+mod hotkey;
 mod startup;
 
 use std::cell::RefCell;
@@ -12,6 +14,7 @@ use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
 
 use ezkey_core::{Action, Engine, InputMethod, ToneStyle};
+use hotkey::{Event, Hotkey, Matcher};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -33,43 +36,26 @@ const ID_VNI: usize = 5;
 const ID_AUTOSTART: usize = 6;
 const ID_ADMIN: usize = 7;
 const ID_PER_APP: usize = 8;
-/// `ID_HOTKEY_BASE + Hotkey as usize` for each hotkey choice.
-const ID_HOTKEY_BASE: usize = 20;
+const ID_HOTKEY_MENU: usize = 19;
+const ID_HOTKEY_CTRL_SHIFT: usize = 20;
+const ID_HOTKEY_ALT_Z: usize = 21;
+const ID_HOTKEY_NONE: usize = 22;
+const ID_HOTKEY_RECORD: usize = 23;
+const ID_HOTKEY_CUSTOM: usize = 24;
+
+/// Recording a new hotkey gives up after this long.
+const TIMER_RECORD: usize = 1;
+const RECORD_TIMEOUT_MS: u32 = 10_000;
 
 const SETTINGS_KEY: &str = "Software\\ezkey";
 const RUN_AS_ADMIN: &str = "RunAsAdmin";
 const PER_APP: &str = "PerApp";
 const HOTKEY: &str = "Hotkey";
 
-/// Injected after a swallowed Alt+Z so releasing Alt does not open the
-/// focused app's menu bar (0xE8 is an unassigned virtual key).
+/// Injected after a swallowed hotkey involving Alt or Win, so releasing
+/// them does not open the app's menu bar or the Start menu (0xE8 is an
+/// unassigned virtual key).
 const VK_MENU_MASK: VIRTUAL_KEY = 0xE8;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Hotkey {
-    CtrlShift = 0,
-    AltZ = 1,
-    None = 2,
-}
-
-impl Hotkey {
-    const ALL: [Hotkey; 3] = [Hotkey::CtrlShift, Hotkey::AltZ, Hotkey::None];
-
-    fn from_setting(value: Option<u32>) -> Hotkey {
-        Hotkey::ALL
-            .into_iter()
-            .find(|h| Some(*h as u32) == value)
-            .unwrap_or(Hotkey::CtrlShift)
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Hotkey::CtrlShift => "Ctrl+Shift",
-            Hotkey::AltZ => "Alt+Z",
-            Hotkey::None => "Không dùng phím tắt",
-        }
-    }
-}
 
 /// Settings live in HKCU\Software\ezkey as DWORDs.
 fn read_setting(name: &str) -> Option<bool> {
@@ -130,14 +116,7 @@ struct State {
     browser: bool,
     /// Remember Vietnamese / English per app.
     per_app: bool,
-    hotkey: Hotkey,
-    /// Tracked from hook events: GetAsyncKeyState lags behind inside the hook.
-    ctrl_held: bool,
-    shift_held: bool,
-    /// Ctrl and Shift are both held with no other key pressed in between.
-    toggle_armed: bool,
-    /// Z is held after an Alt+Z toggle; its auto-repeat must not toggle again.
-    alt_z_held: bool,
+    hotkeys: Matcher,
     icon_vi: HICON,
     icon_en: HICON,
     taskbar_created: u32,
@@ -219,9 +198,17 @@ fn send_menu_mask() {
 
 enum KeyResult {
     Pass,
-    Swallow(usize, String, bool),
-    /// Toggle the mode; `true` also swallows the key (Alt+Z).
-    Toggle(bool),
+    /// Swallow the key and type a replacement.
+    Replace(usize, String, bool),
+    /// Toggle the mode, swallowing the key unless it is a modifier release.
+    Toggle {
+        swallow: bool,
+        mask: bool,
+    },
+    /// Swallow the key (hotkey repeats, keys pressed while recording).
+    Eat {
+        mask: bool,
+    },
 }
 
 /// Called when another window comes to the front: forgets the current word
@@ -262,34 +249,36 @@ unsafe extern "system" fn foreground_proc(
 
 fn on_key(vk: VIRTUAL_KEY, down: bool, alt: bool) -> KeyResult {
     with_state(|st| {
-        let is_ctrl = matches!(vk, VK_CONTROL | VK_LCONTROL | VK_RCONTROL);
-        let is_shift = matches!(vk, VK_SHIFT | VK_LSHIFT | VK_RSHIFT);
-        if is_ctrl || is_shift {
-            if is_ctrl {
-                st.ctrl_held = down;
-            } else {
-                st.shift_held = down;
+        let event = st.hotkeys.on_key(vk, down);
+        let mask = st.hotkeys.held() & (hotkey::ALT | hotkey::WIN) != 0;
+        match event {
+            Event::Pass => {}
+            Event::Toggle { swallow } => {
+                return KeyResult::Toggle {
+                    swallow,
+                    mask: swallow && mask,
+                }
             }
-            if down {
-                st.toggle_armed = st.hotkey == Hotkey::CtrlShift && st.ctrl_held && st.shift_held;
-            } else if std::mem::take(&mut st.toggle_armed) {
-                return KeyResult::Toggle(false);
+            Event::Swallow => return KeyResult::Eat { mask: false },
+            Event::Recorded(hotkey) => {
+                finish_recording(st, Some(hotkey));
+                return KeyResult::Eat { mask };
             }
+            Event::Rejected => {
+                show_balloon(
+                    st,
+                    "Không dùng được tổ hợp này",
+                    "Phím này dùng để gõ chữ. Hãy thêm Ctrl, Alt hoặc Win, ví dụ Ctrl+Alt+V. Esc để huỷ.",
+                );
+                return KeyResult::Eat { mask };
+            }
+            Event::Cancelled => {
+                finish_recording(st, None);
+                return KeyResult::Eat { mask: false };
+            }
+        }
+        if !down || hotkey::modifier_bit(vk).is_some() {
             return KeyResult::Pass;
-        }
-        if vk == 0x5A && st.alt_z_held {
-            // Swallow the repeats and the release of an Alt+Z toggle.
-            st.alt_z_held = down;
-            return KeyResult::Swallow(0, String::new(), false);
-        }
-        if !down {
-            return KeyResult::Pass;
-        }
-        st.toggle_armed = false;
-        let win = key_down(VK_LWIN) || key_down(VK_RWIN);
-        if st.hotkey == Hotkey::AltZ && vk == 0x5A && alt && !st.ctrl_held && !win {
-            st.alt_z_held = true;
-            return KeyResult::Toggle(true);
         }
 
         // Backup for the foreground event hook, which arrives asynchronously.
@@ -297,7 +286,7 @@ fn on_key(vk: VIRTUAL_KEY, down: bool, alt: bool) -> KeyResult {
         if !st.enabled {
             return KeyResult::Pass;
         }
-        if alt || key_down(VK_CONTROL) || win {
+        if alt || key_down(VK_CONTROL) || key_down(VK_LWIN) || key_down(VK_RWIN) {
             st.engine.reset();
             return KeyResult::Pass;
         }
@@ -319,14 +308,14 @@ fn on_key(vk: VIRTUAL_KEY, down: bool, alt: bool) -> KeyResult {
             _ if typed.is_some() => match st.engine.process_key(typed.unwrap_or_default()) {
                 Action::PassThrough => KeyResult::Pass,
                 Action::Replace { backspaces, text } => {
-                    KeyResult::Swallow(backspaces, text, st.browser)
+                    KeyResult::Replace(backspaces, text, st.browser)
                 }
             },
             VK_BACK => {
                 st.engine.backspace();
                 KeyResult::Pass
             }
-            VK_CAPITAL | VK_LMENU | VK_RMENU | VK_MENU => KeyResult::Pass,
+            VK_CAPITAL => KeyResult::Pass,
             _ => {
                 st.engine.reset();
                 KeyResult::Pass
@@ -346,18 +335,24 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
             // or any window message is handled.
             match on_key(kb.vkCode as VIRTUAL_KEY, down, alt) {
                 KeyResult::Pass => {}
-                KeyResult::Swallow(backspaces, text, browser) => {
-                    if backspaces > 0 || !text.is_empty() {
-                        send_replacement(backspaces, &text, browser);
-                    }
+                KeyResult::Replace(backspaces, text, browser) => {
+                    send_replacement(backspaces, &text, browser);
                     return 1;
                 }
-                KeyResult::Toggle(swallow) => {
+                KeyResult::Toggle { swallow, mask } => {
                     toggle();
-                    if swallow {
+                    if mask {
                         send_menu_mask();
+                    }
+                    if swallow {
                         return 1;
                     }
+                }
+                KeyResult::Eat { mask } => {
+                    if mask {
+                        send_menu_mask();
+                    }
+                    return 1;
                 }
             }
         }
@@ -377,6 +372,14 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
     CallNextHookEx(null_mut(), code, wparam, lparam)
 }
 
+fn copy_wide(dst: &mut [u16], text: &str) {
+    // Leave room for the terminating zero.
+    let limit = dst.len() - 1;
+    for (d, s) in dst.iter_mut().take(limit).zip(text.encode_utf16()) {
+        *d = s;
+    }
+}
+
 fn tray_data(st: &State) -> NOTIFYICONDATAW {
     let mut nid: NOTIFYICONDATAW = unsafe { zeroed() };
     nid.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
@@ -390,17 +393,18 @@ fn tray_data(st: &State) -> NOTIFYICONDATAW {
     } else {
         "English"
     };
+    let hotkey = st.hotkeys.hotkey;
     let mut tip = format!("ezkey: {mode}");
-    if st.hotkey != Hotkey::None {
+    if st.hotkeys.recording() {
+        tip = "ezkey: nhấn phím tắt mới (Esc để huỷ)".into();
+    } else if !hotkey.is_none() {
         let action = if st.enabled { "tắt" } else { "bật" };
-        tip.push_str(&format!(" ({} để {action})", st.hotkey.label()));
+        tip.push_str(&format!(" ({} để {action})", hotkey.label()));
     }
     if st.elevated {
         tip.push_str(" [Admin]");
     }
-    for (dst, src) in nid.szTip.iter_mut().zip(tip.encode_utf16()) {
-        *dst = src;
-    }
+    copy_wide(&mut nid.szTip, &tip);
     nid
 }
 
@@ -413,6 +417,16 @@ fn update_tray(message: NOTIFY_ICON_MESSAGE) {
     with_state(|st| notify_tray(st, message));
 }
 
+/// A notification from the tray icon (a toast on Windows 10 and 11).
+fn show_balloon(st: &State, title: &str, text: &str) {
+    let mut nid = tray_data(st);
+    nid.uFlags |= NIF_INFO;
+    nid.dwInfoFlags = NIIF_INFO;
+    copy_wide(&mut nid.szInfoTitle, title);
+    copy_wide(&mut nid.szInfo, text);
+    unsafe { Shell_NotifyIconW(NIM_MODIFY, &nid) };
+}
+
 fn toggle() {
     with_state(|st| {
         st.enabled = !st.enabled;
@@ -423,6 +437,39 @@ fn toggle() {
         }
         notify_tray(st, NIM_MODIFY);
     });
+}
+
+fn set_hotkey(st: &mut State, hotkey: Hotkey) {
+    st.hotkeys.set(hotkey);
+    write_number(HOTKEY, hotkey.to_setting());
+    notify_tray(st, NIM_MODIFY);
+}
+
+fn start_recording(st: &mut State) {
+    st.hotkeys.start_recording();
+    unsafe { SetTimer(st.hwnd, TIMER_RECORD, RECORD_TIMEOUT_MS, None) };
+    show_balloon(
+        st,
+        "Đặt phím tắt bật/tắt",
+        "Nhấn tổ hợp phím mới, ví dụ Ctrl+Alt+V, Ctrl+Space hoặc Ctrl+Alt. Esc để huỷ.",
+    );
+}
+
+/// Ends recording: `Some` keeps the new hotkey, `None` keeps the old one.
+fn finish_recording(st: &mut State, hotkey: Option<Hotkey>) {
+    unsafe { KillTimer(st.hwnd, TIMER_RECORD) };
+    st.hotkeys.cancel_recording();
+    match hotkey {
+        Some(hotkey) => {
+            set_hotkey(st, hotkey);
+            show_balloon(st, "Đã đặt phím tắt", &hotkey.label());
+        }
+        None => {
+            notify_tray(st, NIM_MODIFY);
+            let kept = format!("Giữ phím tắt cũ: {}", st.hotkeys.hotkey.label());
+            show_balloon(st, "Đã huỷ đặt phím tắt", &kept);
+        }
+    }
 }
 
 unsafe fn make_icon(text: &str, background: COLORREF) -> HICON {
@@ -492,6 +539,40 @@ unsafe fn make_icon(text: &str, background: COLORREF) -> HICON {
     icon
 }
 
+unsafe fn append_item(menu: HMENU, id: usize, label: &str, checked: Option<bool>) {
+    let label = wide(label);
+    let check = match checked {
+        Some(true) => MF_CHECKED,
+        Some(false) => MF_UNCHECKED,
+        None => 0,
+    };
+    AppendMenuW(menu, MF_STRING | check, id, label.as_ptr());
+}
+
+unsafe fn hotkey_menu(current: Hotkey) -> HMENU {
+    let menu = CreatePopupMenu();
+    let presets = [
+        (ID_HOTKEY_CTRL_SHIFT, Hotkey::CTRL_SHIFT),
+        (ID_HOTKEY_ALT_Z, Hotkey::ALT_Z),
+    ];
+    for (id, preset) in presets {
+        append_item(menu, id, &preset.label(), Some(preset == current));
+    }
+    let custom = !current.is_none() && presets.iter().all(|(_, p)| *p != current);
+    if custom {
+        append_item(menu, ID_HOTKEY_CUSTOM, &current.label(), Some(true));
+    }
+    AppendMenuW(menu, MF_SEPARATOR, 0, null());
+    append_item(menu, ID_HOTKEY_RECORD, "Đặt phím tắt khác…", None);
+    append_item(
+        menu,
+        ID_HOTKEY_NONE,
+        &Hotkey::NONE.label(),
+        Some(current.is_none()),
+    );
+    menu
+}
+
 unsafe fn show_menu(hwnd: HWND) {
     let (enabled, modern, vni, per_app, hotkey) = with_state(|st| {
         (
@@ -499,28 +580,16 @@ unsafe fn show_menu(hwnd: HWND) {
             st.engine.style() == ToneStyle::Modern,
             st.engine.method() == InputMethod::Vni,
             st.per_app,
-            st.hotkey,
+            st.hotkeys.hotkey,
         )
     });
     let autostart = startup::autostart_enabled();
     let admin = read_setting(RUN_AS_ADMIN) == Some(true);
-    let check = |on: bool| if on { MF_CHECKED } else { MF_UNCHECKED };
 
-    let hotkey_menu = CreatePopupMenu();
-    for choice in Hotkey::ALL {
-        let label = wide(choice.label());
-        let flags = MF_STRING | check(choice == hotkey);
-        AppendMenuW(
-            hotkey_menu,
-            flags,
-            ID_HOTKEY_BASE + choice as usize,
-            label.as_ptr(),
-        );
-    }
-
-    let toggle_label = match hotkey {
-        Hotkey::None => "Gõ tiếng Việt".to_string(),
-        key => format!("Gõ tiếng Việt\t{}", key.label()),
+    let toggle_label = if hotkey.is_none() {
+        "Gõ tiếng Việt".to_string()
+    } else {
+        format!("Gõ tiếng Việt\t{}", hotkey.label())
     };
     let menu = CreatePopupMenu();
     let items: [(usize, &str, Option<bool>); 12] = [
@@ -531,24 +600,24 @@ unsafe fn show_menu(hwnd: HWND) {
         (ID_MODERN, "Đặt dấu kiểu mới (hoà, thuý)", Some(modern)),
         (0, "", None),
         (ID_PER_APP, "Nhớ chế độ V/E theo từng app", Some(per_app)),
-        (ID_HOTKEY_BASE, "Phím tắt bật/tắt", None),
+        (ID_HOTKEY_MENU, "Phím tắt bật/tắt", None),
         (ID_AUTOSTART, "Khởi động cùng Windows", Some(autostart)),
         (ID_ADMIN, "Chạy với quyền Administrator", Some(admin)),
         (0, "", None),
         (ID_EXIT, "Thoát", None),
     ];
     for (id, label, checked) in items {
-        let label = wide(label);
         match id {
-            0 => AppendMenuW(menu, MF_SEPARATOR, 0, null()),
-            ID_HOTKEY_BASE => AppendMenuW(menu, MF_POPUP, hotkey_menu as usize, label.as_ptr()),
-            _ => AppendMenuW(
-                menu,
-                MF_STRING | checked.map_or(0, check),
-                id,
-                label.as_ptr(),
-            ),
-        };
+            0 => {
+                AppendMenuW(menu, MF_SEPARATOR, 0, null());
+            }
+            ID_HOTKEY_MENU => {
+                let label = wide(label);
+                let sub = hotkey_menu(hotkey);
+                AppendMenuW(menu, MF_POPUP, sub as usize, label.as_ptr());
+            }
+            _ => append_item(menu, id, label, checked),
+        }
     }
 
     let mut pt = POINT { x: 0, y: 0 };
@@ -595,14 +664,10 @@ unsafe fn show_menu(hwnd: HWND) {
                 apps::save(app, st.enabled);
             }
         }),
-        id if (ID_HOTKEY_BASE..ID_HOTKEY_BASE + Hotkey::ALL.len()).contains(&id) => {
-            with_state(|st| {
-                st.hotkey = Hotkey::ALL[id - ID_HOTKEY_BASE];
-                st.toggle_armed = false;
-                write_number(HOTKEY, st.hotkey as u32);
-                notify_tray(st, NIM_MODIFY);
-            })
-        }
+        ID_HOTKEY_CTRL_SHIFT => with_state(|st| set_hotkey(st, Hotkey::CTRL_SHIFT)),
+        ID_HOTKEY_ALT_Z => with_state(|st| set_hotkey(st, Hotkey::ALT_Z)),
+        ID_HOTKEY_NONE => with_state(|st| set_hotkey(st, Hotkey::NONE)),
+        ID_HOTKEY_RECORD => with_state(start_recording),
         ID_AUTOSTART => startup::set_autostart(!autostart, admin),
         ID_ADMIN => set_run_as_admin(hwnd, !admin, autostart),
         ID_EXIT => PostQuitMessage(0),
@@ -679,6 +744,16 @@ unsafe extern "system" fn wnd_proc(
         }
         return 0;
     }
+    if msg == WM_TIMER && wparam == TIMER_RECORD {
+        with_state(|st| {
+            if st.hotkeys.recording() {
+                finish_recording(st, None);
+            } else {
+                KillTimer(hwnd, TIMER_RECORD);
+            }
+        });
+        return 0;
+    }
     if msg == WM_DESTROY {
         PostQuitMessage(0);
         return 0;
@@ -750,11 +825,7 @@ fn main() {
                 app: None,
                 browser: false,
                 per_app: read_setting(PER_APP).unwrap_or(true),
-                hotkey: Hotkey::from_setting(read_number(HOTKEY)),
-                ctrl_held: false,
-                shift_held: false,
-                toggle_armed: false,
-                alt_z_held: false,
+                hotkeys: Matcher::new(Hotkey::from_setting(read_number(HOTKEY))),
                 icon_vi: make_icon("V", 0x00B3_6B1E),
                 icon_en: make_icon("E", 0x0060_6060),
                 taskbar_created: RegisterWindowMessageW(taskbar_msg.as_ptr()),
