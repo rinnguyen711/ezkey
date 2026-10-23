@@ -16,12 +16,37 @@ enum Setting {
     static let vni = "Vni"
 }
 
+/// Browsers whose address bar inline-autocompletes: after "a" the bar holds
+/// "a[mazon.com]" with the suggestion selected, so a plain Delete removes
+/// the suggestion instead of the "a" and "aa" ends up as "aâ".
+/// Matched as bundle identifier prefixes to cover Beta/Dev/Canary builds.
+let browserBundlePrefixes = [
+    "com.microsoft.edgemac",
+    "com.google.Chrome",
+    "org.chromium.Chromium",
+    "com.brave.Browser",
+    "com.operasoftware.Opera",
+    "com.vivaldi.Vivaldi",
+    "company.thebrowser.Browser",
+    "ru.yandex.desktop.yandex-browser",
+    "org.mozilla.firefox",
+    "org.mozilla.nightly",
+    "com.apple.Safari",
+]
+
+func isBrowser(_ bundleID: String?) -> Bool {
+    guard let id = bundleID else { return false }
+    return browserBundlePrefixes.contains { id.hasPrefix($0) }
+}
+
 final class Ime {
     let engine = ezkey_engine_new()!
     let defaults = UserDefaults.standard
     var enabled: Bool
     var modern = false
     var vni = false
+    /// The frontmost app is a browser (see `isBrowser`).
+    var browser = false
     /// Ctrl and Shift are both held with no other key pressed in between.
     var toggleArmed = false
     var tap: CFMachPort?
@@ -62,8 +87,22 @@ func post(_ event: CGEvent, _ proxy: CGEventTapProxy) {
     event.tapPostEvent(proxy)
 }
 
-func sendReplacement(backspaces: Int, text: String, proxy: CGEventTapProxy) {
+/// Typed first in browsers: it replaces any selected autocomplete suggestion
+/// and is then erased with one extra Delete.
+let autocompleteBreaker: UniChar = 0x202F
+
+func sendReplacement(backspaces: Int, text: String, browser: Bool, proxy: CGEventTapProxy) {
     let source = CGEventSource(stateID: .privateState)
+    var backspaces = backspaces
+    if browser && backspaces > 0 {
+        for down in [true, false] {
+            if let e = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down) {
+                e.keyboardSetUnicodeString(stringLength: 1, unicodeString: [autocompleteBreaker])
+                post(e, proxy)
+            }
+        }
+        backspaces += 1
+    }
     for _ in 0..<backspaces {
         for down in [true, false] {
             if let e = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Delete), keyDown: down) {
@@ -142,7 +181,7 @@ func handle(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmana
     for code in out[0..<Int(n)] {
         if let s = Unicode.Scalar(code) { text.unicodeScalars.append(s) }
     }
-    sendReplacement(backspaces: Int(backspaces), text: text, proxy: proxy)
+    sendReplacement(backspaces: Int(backspaces), text: text, browser: ime.browser, proxy: proxy)
     return nil
 }
 
@@ -178,6 +217,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
         ime.onToggle = { [weak self] in self?.refresh() }
         refresh()
+
+        let workspace = NSWorkspace.shared
+        ime.browser = isBrowser(workspace.frontmostApplication?.bundleIdentifier)
+        workspace.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            ime.browser = isBrowser(app?.bundleIdentifier)
+            ezkey_engine_reset(ime.engine)
+        }
 
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         if AXIsProcessTrustedWithOptions(options) {
