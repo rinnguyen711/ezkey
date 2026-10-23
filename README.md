@@ -97,6 +97,21 @@ Lần đầu chạy, cấp quyền tại System Settings → Privacy & Security 
 
 Bản macOS chưa được build hay chạy thử trên máy Mac thật.
 
+`UNIVERSAL=1 sh macos/build.sh` build một app chạy được trên cả Mac chip Apple lẫn Mac Intel. Cần thêm `rustup target add aarch64-apple-darwin x86_64-apple-darwin`.
+
+## Phát hành
+
+Đẩy một tag dạng `v0.1.0` lên GitHub để workflow [release.yml](.github/workflows/release.yml) build cả hai bản rồi tạo GitHub Release:
+
+```
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Release gồm `ezkey-setup.exe` (bộ cài), `ezkey-portable.exe` (chạy không cần cài) và `ezkey-macos.zip`. Chạy tay workflow ở tab Actions thì chỉ build, file nằm trong mục Artifacts của lần chạy đó.
+
+App macOS chỉ có chữ ký ad-hoc, chưa notarize, nên macOS sẽ chặn khi mở lần đầu. Sau khi giải nén, chạy `xattr -dr com.apple.quarantine ezkey.app` rồi mở lại.
+
 ## Kiểm thử
 
 ```

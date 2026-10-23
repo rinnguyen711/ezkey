@@ -1,0 +1,75 @@
+# Builds ezkey for Windows and macOS. Pushing a tag like v0.1.0 also
+# publishes a GitHub release with the built files; a manual run only
+# uploads them as workflow artifacts.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --release -p ezkey-core
+      - run: cargo build --release -p ezkey-win
+      # The installer embeds target/release/ezkey.exe, so it builds second.
+      - run: cargo build --release -p ezkey-setup
+      - name: Collect files
+        shell: bash
+        run: |
+          mkdir dist
+          cp target/release/ezkey-setup.exe dist/ezkey-setup.exe
+          cp target/release/ezkey.exe dist/ezkey-portable.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - run: cargo test --release -p ezkey-core
+      - run: sh macos/build.sh
+        env:
+          UNIVERSAL: "1"
+      - name: Zip the app
+        run: |
+          mkdir dist
+          ditto -c -k --keepParent macos/build/ezkey.app dist/ezkey-macos.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "ezkey $GITHUB_REF_NAME" \
+            --generate-notes
