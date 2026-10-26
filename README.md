@@ -43,7 +43,7 @@ Gõ lặp số để huỷ: `a11` → a1. Số đứng một mình vẫn là s�
   - chọn **Alt+Z**, hoặc tắt hẳn phím tắt;
   - chọn **Đặt phím tắt khác…** rồi nhấn tổ hợp bạn muốn, ví dụ Ctrl+Alt+V, Ctrl+Space, Ctrl+Alt hoặc F9. Nhấn Esc để huỷ. Nếu không nhấn gì trong 10 giây, ezkey tự huỷ.
   - Phím tắt phải có Ctrl, Alt hoặc Win, hoặc là một phím đặc biệt như F1–F24, Pause, Scroll Lock, Caps Lock. Một chữ cái đứng riêng hay Shift+chữ sẽ bị từ chối, vì đó là phím để gõ chữ.
-- **Nhớ chế độ V/E theo từng app** (Windows, bật sẵn): mỗi app giữ chế độ bạn chọn lần cuối trong app đó. Ví dụ để VS Code ở E và Zalo ở V; khi chuyển qua lại giữa hai app, ezkey tự đổi theo. Danh sách được lưu trong registry, tại `HKCU\Software\ezkey\Apps`.
+- **Nhớ chế độ V/E theo từng app** (bật sẵn, tắt trong menu): mỗi app giữ chế độ bạn chọn lần cuối trong app đó. Ví dụ để VS Code ở E và Zalo ở V; khi chuyển qua lại giữa hai app, ezkey tự đổi theo. Trên Windows, danh sách được lưu trong registry, tại `HKCU\Software\ezkey\Apps`; trên macOS, trong `defaults read io.github.ezkey Apps`.
 - Kiểu gõ, kiểu đặt dấu và trạng thái bật/tắt được đổi trong menu và được nhớ cho lần mở sau.
 
 ## Windows

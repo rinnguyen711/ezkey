@@ -14,6 +14,9 @@ enum Setting {
     static let enabled = "Enabled"
     static let modern = "ModernTone"
     static let vni = "Vni"
+    static let perApp = "PerApp"
+    /// Bundle ID → Vietnamese on, the mode last chosen in each app.
+    static let apps = "Apps"
 }
 
 final class Ime {
@@ -22,6 +25,10 @@ final class Ime {
     var enabled: Bool
     var modern = false
     var vni = false
+    /// Remember Vietnamese / English per app.
+    var perApp: Bool
+    /// Bundle ID of the app the user is typing in.
+    var app = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
     /// Ctrl and Shift are both held with no other key pressed in between.
     var toggleArmed = false
     var tap: CFMachPort?
@@ -29,6 +36,7 @@ final class Ime {
 
     init() {
         enabled = defaults.object(forKey: Setting.enabled) as? Bool ?? true
+        perApp = defaults.object(forKey: Setting.perApp) as? Bool ?? true
         setModern(defaults.bool(forKey: Setting.modern))
         setVni(defaults.bool(forKey: Setting.vni))
     }
@@ -37,6 +45,33 @@ final class Ime {
         enabled.toggle()
         defaults.set(enabled, forKey: Setting.enabled)
         ezkey_engine_reset(engine)
+        rememberForApp()
+        onToggle()
+    }
+
+    func rememberForApp() {
+        guard perApp, let app else { return }
+        var apps = defaults.dictionary(forKey: Setting.apps) ?? [:]
+        apps[app] = enabled
+        defaults.set(apps, forKey: Setting.apps)
+    }
+
+    func setPerApp(_ on: Bool) {
+        perApp = on
+        defaults.set(on, forKey: Setting.perApp)
+        // Start from the current mode for the app the user came from.
+        rememberForApp()
+    }
+
+    /// Another app came to the front: switch to the mode last chosen there.
+    func activated(_ bundleID: String?) {
+        guard let bundleID, bundleID != Bundle.main.bundleIdentifier, bundleID != app else { return }
+        app = bundleID
+        ezkey_engine_reset(engine)
+        guard perApp, let remembered = defaults.dictionary(forKey: Setting.apps)?[bundleID] as? Bool,
+              remembered != enabled else { return }
+        enabled = remembered
+        defaults.set(enabled, forKey: Setting.enabled)
         onToggle()
     }
 
@@ -236,6 +271,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var telexItem: NSMenuItem!
     var vniItem: NSMenuItem!
     var modernItem: NSMenuItem!
+    var perAppItem: NSMenuItem!
     var loginItem: NSMenuItem!
     var permissionTimer: Timer?
 
@@ -253,6 +289,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         telexItem = add("Telex", #selector(chooseTelex))
         vniItem = add("VNI", #selector(chooseVni))
         modernItem = add("Đặt dấu kiểu mới (hoà, thuý)", #selector(toggleModern))
+        perAppItem = add("Nhớ chế độ V/E theo từng app", #selector(togglePerApp))
         menu.addItem(.separator())
         loginItem = add("Mở cùng máy", #selector(toggleLogin))
         if #unavailable(macOS 13) {
@@ -261,6 +298,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Thoát", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
         ime.onToggle = { [weak self] in self?.refresh() }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            ime.activated(app?.bundleIdentifier)
+        }
         refresh()
 
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
@@ -317,6 +360,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         telexItem.state = ime.vni ? .off : .on
         vniItem.state = ime.vni ? .on : .off
         modernItem.state = ime.modern ? .on : .off
+        perAppItem.state = ime.perApp ? .on : .off
         if #available(macOS 13, *) {
             loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         }
@@ -333,6 +377,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func chooseVni() {
         ime.setVni(true)
+        refresh()
+    }
+
+    @objc func togglePerApp() {
+        ime.setPerApp(!ime.perApp)
         refresh()
     }
 
