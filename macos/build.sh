@@ -35,6 +35,8 @@ else
         target/release/libezkey_core.a \
         -o "$APP/Contents/MacOS/ezkey"
 fi
-# Ad-hoc signature; macOS asks for Accessibility permission again after each rebuild.
-codesign --force --sign - "$APP"
+# Ad-hoc signature by default; macOS then asks for Accessibility permission
+# again after each rebuild. A real identity keeps it, e.g.
+# CODESIGN_IDENTITY="Apple Development" sh macos/build.sh
+codesign --force --sign "${CODESIGN_IDENTITY:--}" "$APP"
 echo "Built $APP"

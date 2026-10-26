@@ -120,4 +120,13 @@ cargo build --release -p ezkey-win
 cargo run --release -p ezkey-win --example e2e -- target\release\ezkey.exe
 ```
 
-Bài test `e2e` mở Notepad, gõ phím thật qua `SendInput`, rồi đọc lại văn bản. Cần tắt các bộ gõ tiếng Việt khác trước khi chạy; bài test sẽ tự dừng nếu phát hiện có bộ gõ khác. Trong lúc test chạy (khoảng 20 giây), đừng bấm phím hay click chuột. Bài test cũng cần tắt ezkey đang chạy trước. Test sẽ tạm đặt cài đặt trong registry rồi trả lại như cũ khi xong.
+Trên macOS:
+
+```
+CODESIGN_IDENTITY="Apple Development" sh macos/build.sh
+swift macos/e2e.swift macos/build/ezkey.app
+```
+
+Bài test này mở TextEdit, gõ phím thật (gõ chậm và gõ nhanh chồng phím), rồi đọc lại văn bản. Thêm `edge-bar` hoặc `edge-page` vào cuối lệnh để gõ vào thanh địa chỉ hoặc một ô nhập trên trang của Microsoft Edge. Phím ảo không giống hệt bàn phím thật, nên lỗi gõ nhanh có thể chỉ hiện khi gõ tay; khi đó mở ezkey bằng `open --env EZKEY_LOG=/tmp/ezkey.log macos/build/ezkey.app` để ghi lại từng phím (log chứa mọi phím đã gõ, kể cả mật khẩu). App chạy lệnh (Terminal, VS Code…) và `ezkey.app` đều cần quyền Accessibility. Ký bằng chứng chỉ thật (`CODESIGN_IDENTITY`) thì không phải cấp lại quyền sau mỗi lần build.
+
+Bài test `e2e` trên Windows mở Notepad, gõ phím thật qua `SendInput`, rồi đọc lại văn bản. Cần tắt các bộ gõ tiếng Việt khác trước khi chạy; bài test sẽ tự dừng nếu phát hiện có bộ gõ khác. Trong lúc test chạy (khoảng 20 giây), đừng bấm phím hay click chuột. Bài test cũng cần tắt ezkey đang chạy trước. Test sẽ tạm đặt cài đặt trong registry rồi trả lại như cũ khi xong.
