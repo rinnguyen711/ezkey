@@ -96,3 +96,12 @@ pub unsafe extern "C" fn ezkey_engine_set_vni(engine: *mut Engine, vni: bool) {
         InputMethod::Telex
     });
 }
+
+/// `false` keeps marks on words that are not Vietnamese (`ddc` → "đc").
+///
+/// # Safety
+/// `engine` must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn ezkey_engine_set_spell_check(engine: *mut Engine, on: bool) {
+    (*engine).set_spell_check(on);
+}

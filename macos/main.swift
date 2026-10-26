@@ -15,6 +15,7 @@ enum Setting {
     static let modern = "ModernTone"
     static let vni = "Vni"
     static let perApp = "PerApp"
+    static let spellCheck = "SpellCheck"
     /// Bundle ID → Vietnamese on, the mode last chosen in each app.
     static let apps = "Apps"
 }
@@ -25,6 +26,7 @@ final class Ime {
     var enabled: Bool
     var modern = false
     var vni = false
+    var spellCheck = true
     /// Remember Vietnamese / English per app.
     var perApp: Bool
     /// Bundle ID of the app the user is typing in.
@@ -39,6 +41,7 @@ final class Ime {
         perApp = defaults.object(forKey: Setting.perApp) as? Bool ?? true
         setModern(defaults.bool(forKey: Setting.modern))
         setVni(defaults.bool(forKey: Setting.vni))
+        setSpellCheck(defaults.object(forKey: Setting.spellCheck) as? Bool ?? true)
     }
 
     func toggle() {
@@ -80,6 +83,12 @@ final class Ime {
         defaults.set(on, forKey: Setting.modern)
         ezkey_engine_set_modern_style(engine, on)
         ezkey_engine_reset(engine)
+    }
+
+    func setSpellCheck(_ on: Bool) {
+        spellCheck = on
+        defaults.set(on, forKey: Setting.spellCheck)
+        ezkey_engine_set_spell_check(engine, on)
     }
 
     func setVni(_ on: Bool) {
@@ -141,14 +150,36 @@ let chromiumBrowsers = [
     "com.vivaldi.Vivaldi",
     "company.thebrowser.Browser",
 ]
-let otherBrowsers = ["org.mozilla.firefox", "com.apple.Safari"]
+/// Other apps whose search field inline-autocompletes the same way; Spotlight
+/// turned "rus" into "ruú".
+let otherAutocompleters = ["org.mozilla.firefox", "com.apple.Safari", "com.apple.Spotlight"]
 
-func frontmostMatches(_ ids: [String]) -> Bool {
-    guard let id = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return false }
+let systemWide: AXUIElement = {
+    let element = AXUIElementCreateSystemWide()
+    // We ask from inside the event tap; never stall typing on a hung app.
+    AXUIElementSetMessagingTimeout(element, 0.05)
+    return element
+}()
+
+/// The app with keyboard focus. Spotlight never becomes the frontmost app,
+/// and key events name the app behind it as their target.
+func focusedBundleID() -> String? {
+    var app: CFTypeRef?
+    var pid: pid_t = 0
+    if AXUIElementCopyAttributeValue(systemWide, kAXFocusedApplicationAttribute as CFString, &app) == .success,
+       AXUIElementGetPid(app as! AXUIElement, &pid) == .success,
+       let id = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier {
+        return id
+    }
+    return NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+}
+
+func matches(_ id: String?, _ ids: [String]) -> Bool {
+    guard let id else { return false }
     return ids.contains { id.hasPrefix($0) }
 }
 
-/// Typed first in Safari/Firefox: it replaces any selected autocomplete
+/// Typed first in Safari/Firefox/Spotlight: it replaces any selected autocomplete
 /// suggestion and is then erased with one extra Backspace. Chromium on macOS
 /// drops it, so the extra Backspace ate a real letter ("chào" → "cào").
 let autocompleteBreaker = "\u{202F}"
@@ -157,11 +188,12 @@ let autocompleteBreaker = "\u{202F}"
 func sendReplacement(backspaces: Int, text: String, keycode: CGKeyCode, proxy: CGEventTapProxy) {
     let source = CGEventSource(stateID: .privateState)
     var backspaces = backspaces
-    if backspaces > 0 && frontmostMatches(chromiumBrowsers) {
+    let app = backspaces > 0 ? focusedBundleID() : nil
+    if matches(app, chromiumBrowsers) {
         // Shift+Left selects the character before the caret along with any
         // suggestion, so the first Backspace deletes both.
         sendKey(kVK_LeftArrow, flags: .maskShift, source: source, proxy: proxy)
-    } else if backspaces > 0 && frontmostMatches(otherBrowsers) {
+    } else if matches(app, otherAutocompleters) {
         let units = Array(autocompleteBreaker.utf16)
         for down in [true, false] {
             if let e = CGEvent(keyboardEventSource: source, virtualKey: keycode, keyDown: down) {
@@ -272,6 +304,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var vniItem: NSMenuItem!
     var modernItem: NSMenuItem!
     var perAppItem: NSMenuItem!
+    var spellCheckItem: NSMenuItem!
     var loginItem: NSMenuItem!
     var permissionTimer: Timer?
 
@@ -289,6 +322,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         telexItem = add("Telex", #selector(chooseTelex))
         vniItem = add("VNI", #selector(chooseVni))
         modernItem = add("Đặt dấu kiểu mới (hoà, thuý)", #selector(toggleModern))
+        spellCheckItem = add("Kiểm tra chính tả (tắt để gõ tắt: đc, đt)", #selector(toggleSpellCheck))
         perAppItem = add("Nhớ chế độ V/E theo từng app", #selector(togglePerApp))
         menu.addItem(.separator())
         loginItem = add("Mở cùng máy", #selector(toggleLogin))
@@ -361,6 +395,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         vniItem.state = ime.vni ? .on : .off
         modernItem.state = ime.modern ? .on : .off
         perAppItem.state = ime.perApp ? .on : .off
+        spellCheckItem.state = ime.spellCheck ? .on : .off
         if #available(macOS 13, *) {
             loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         }
@@ -377,6 +412,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func chooseVni() {
         ime.setVni(true)
+        refresh()
+    }
+
+    @objc func toggleSpellCheck() {
+        ime.setSpellCheck(!ime.spellCheck)
         refresh()
     }
 

@@ -21,5 +21,7 @@ void ezkey_engine_reset(EzkeyEngine *engine);
 void ezkey_engine_set_modern_style(EzkeyEngine *engine, bool modern);
 /* false = Telex, true = VNI */
 void ezkey_engine_set_vni(EzkeyEngine *engine, bool vni);
+/* false keeps marks on words that are not Vietnamese: ddc -> đc */
+void ezkey_engine_set_spell_check(EzkeyEngine *engine, bool on);
 
 #endif

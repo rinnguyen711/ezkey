@@ -48,6 +48,9 @@ pub struct Engine {
     raw: Option<Vec<char>>,
     style: ToneStyle,
     method: InputMethod,
+    /// Restore the typed keys when the word stops being Vietnamese. Off lets
+    /// abbreviations like `ddc` → "đc" through, but `world` → "ưởld".
+    spell_check: bool,
 }
 
 impl Default for Engine {
@@ -70,7 +73,12 @@ impl Engine {
             raw: Some(Vec::new()),
             style: ToneStyle::Classic,
             method: InputMethod::Telex,
+            spell_check: true,
         }
+    }
+
+    pub fn set_spell_check(&mut self, on: bool) {
+        self.spell_check = on;
     }
 
     pub fn set_style(&mut self, style: ToneStyle) {
@@ -165,7 +173,7 @@ impl Engine {
     /// Types the word back exactly as keyed once it can no longer be a
     /// Vietnamese syllable; the rest of the word stays literal.
     fn restore_if_invalid(&mut self) {
-        let Some(raw) = &self.raw else { return };
+        let Some(raw) = self.raw.as_ref().filter(|_| self.spell_check) else { return };
         if is_valid(&self.chars(), false) || self.render() == *raw {
             return;
         }
@@ -409,6 +417,14 @@ mod tests {
         let mut e = Engine::new();
         e.set_style(style);
         run(e, input)
+    }
+
+    #[test]
+    fn spell_check_off_keeps_marks() {
+        let mut e = Engine::new();
+        e.set_spell_check(false);
+        assert_eq!(run(e, "ddc vaayj"), "đc vậy");
+        assert_eq!(t("ddc"), "ddc");
     }
 
     fn vni(input: &str) -> String {
