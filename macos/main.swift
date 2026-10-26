@@ -56,26 +56,96 @@ final class Ime {
 
 let ime = Ime()
 
-func post(_ event: CGEvent, _ proxy: CGEventTapProxy) {
+/// Debug log of every key event in and out, enabled by starting ezkey with
+/// `open --env EZKEY_LOG=/tmp/ezkey.log macos/build/ezkey.app`.
+let logFile: FileHandle? = ProcessInfo.processInfo.environment["EZKEY_LOG"].flatMap { path in
+    FileManager.default.createFile(atPath: path, contents: nil)
+    return FileHandle(forWritingAtPath: path)
+}
+
+func log(_ line: String) {
+    logFile?.write((line + "\n").data(using: .utf8)!)
+}
+
+func describe(_ e: CGEvent) -> String {
+    var length = 0
+    var chars = [UniChar](repeating: 0, count: 8)
+    e.keyboardGetUnicodeString(maxStringLength: 8, actualStringLength: &length, unicodeString: &chars)
+    let text = String(utf16CodeUnits: chars, count: length).debugDescription
+    let field = { (f: CGEventField) in e.getIntegerValueField(f) }
+    return String(format: "t=%.3fms type=%d key=%lld repeat=%lld flags=%llx kbd=%lld src=%lld pid=%lld chars=%@",
+                  Double(e.timestamp) / 1e6, e.type.rawValue, field(.keyboardEventKeycode),
+                  field(.keyboardEventAutorepeat), e.flags.rawValue, field(.keyboardEventKeyboardType),
+                  field(.eventSourceStateID), field(.eventSourceUnixProcessID), text)
+}
+
+func post(_ event: CGEvent, _ proxy: CGEventTapProxy, flags: CGEventFlags = []) {
     event.setIntegerValueField(.eventSourceUserData, value: injectedTag)
-    event.flags = []
+    event.flags = flags
+    if logFile != nil { log("  out " + describe(event)) }
     event.tapPostEvent(proxy)
 }
 
-func sendReplacement(backspaces: Int, text: String, proxy: CGEventTapProxy) {
+func sendKey(_ key: Int, flags: CGEventFlags = [], source: CGEventSource?, proxy: CGEventTapProxy) {
+    for down in [true, false] {
+        if let e = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(key), keyDown: down) {
+            post(e, proxy, flags: flags)
+        }
+    }
+}
+
+/// Browsers whose address bar inline-autocompletes: after "a" the bar holds
+/// "a[mazon.com]" with the suggestion selected, so a plain Backspace deletes
+/// the suggestion instead of the "a" and "aa" ends up as "aâ".
+/// Bundle ID prefixes, so beta/canary builds match too.
+let chromiumBrowsers = [
+    "com.microsoft.edgemac",
+    "com.google.Chrome",
+    "com.brave.Browser",
+    "com.operasoftware.Opera",
+    "com.vivaldi.Vivaldi",
+    "company.thebrowser.Browser",
+]
+let otherBrowsers = ["org.mozilla.firefox", "com.apple.Safari"]
+
+func frontmostMatches(_ ids: [String]) -> Bool {
+    guard let id = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return false }
+    return ids.contains { id.hasPrefix($0) }
+}
+
+/// Typed first in Safari/Firefox: it replaces any selected autocomplete
+/// suggestion and is then erased with one extra Backspace. Chromium on macOS
+/// drops it, so the extra Backspace ate a real letter ("chào" → "cào").
+let autocompleteBreaker = "\u{202F}"
+
+/// Sends `backspaces` Backspaces, then `text` as presses of `keycode`.
+func sendReplacement(backspaces: Int, text: String, keycode: CGKeyCode, proxy: CGEventTapProxy) {
     let source = CGEventSource(stateID: .privateState)
-    for _ in 0..<backspaces {
+    var backspaces = backspaces
+    if backspaces > 0 && frontmostMatches(chromiumBrowsers) {
+        // Shift+Left selects the character before the caret along with any
+        // suggestion, so the first Backspace deletes both.
+        sendKey(kVK_LeftArrow, flags: .maskShift, source: source, proxy: proxy)
+    } else if backspaces > 0 && frontmostMatches(otherBrowsers) {
+        let units = Array(autocompleteBreaker.utf16)
         for down in [true, false] {
-            if let e = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Delete), keyDown: down) {
+            if let e = CGEvent(keyboardEventSource: source, virtualKey: keycode, keyDown: down) {
+                e.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
                 post(e, proxy)
             }
         }
+        backspaces += 1
     }
-    // One event per character: some apps only read the first one.
+    for _ in 0..<backspaces {
+        sendKey(kVK_Delete, source: source, proxy: proxy)
+    }
+    // One event per character: some apps only read the first one. They use
+    // the typed key's code: the previous letter's key may still be held, and
+    // Chromium drops a press of a key that is already down ("af" lost "à").
     for ch in text {
         let units = Array(String(ch).utf16)
         for down in [true, false] {
-            if let e = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down) {
+            if let e = CGEvent(keyboardEventSource: source, virtualKey: keycode, keyDown: down) {
                 e.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
                 post(e, proxy)
             }
@@ -85,9 +155,13 @@ func sendReplacement(backspaces: Int, text: String, proxy: CGEventTapProxy) {
 
 func handle(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
     let pass = Unmanaged.passUnretained(event)
+    if logFile != nil && [.keyDown, .keyUp, .flagsChanged].contains(type) {
+        log("in  " + describe(event) + " front=" + (NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "?"))
+    }
     switch type {
     case .tapDisabledByTimeout, .tapDisabledByUserInput:
-        if let tap = ime.tap { CGEvent.tapEnable(tap: tap, enable: true) }
+        // Re-enabling after Accessibility was revoked freezes all input.
+        if AXIsProcessTrusted(), let tap = ime.tap { CGEvent.tapEnable(tap: tap, enable: true) }
         return pass
     case .leftMouseDown, .rightMouseDown, .otherMouseDown:
         ezkey_engine_reset(ime.engine)
@@ -142,8 +216,18 @@ func handle(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmana
     for code in out[0..<Int(n)] {
         if let s = Unicode.Scalar(code) { text.unicodeScalars.append(s) }
     }
-    sendReplacement(backspaces: Int(backspaces), text: text, proxy: proxy)
-    return nil
+    log("  replace backspaces=\(backspaces) text=\(text.debugDescription)")
+    // The last character rides on the real key event, so the app sees a
+    // genuine keystroke with its own key-up; the rest is sent before it.
+    guard let last = text.last else {
+        sendReplacement(backspaces: Int(backspaces), text: text, keycode: 0, proxy: proxy)
+        return nil
+    }
+    let keycode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+    sendReplacement(backspaces: Int(backspaces), text: String(text.dropLast()), keycode: keycode, proxy: proxy)
+    let units = Array(String(last).utf16)
+    event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+    return pass
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -194,7 +278,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func startTap() {
-        let types: [CGEventType] = [.keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown]
+        var types: [CGEventType] = [.keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown]
+        if logFile != nil { types.append(.keyUp) }
         let mask = types.reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -214,6 +299,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+
+        // A filtering tap left running without Accessibility permission blocks
+        // every key and click system-wide, so quit as soon as it is revoked.
+        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+            if !AXIsProcessTrusted() {
+                CGEvent.tapEnable(tap: tap, enable: false)
+                CFMachPortInvalidate(tap)
+                exit(0)
+            }
+        }
     }
 
     func refresh() {
