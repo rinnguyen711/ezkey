@@ -53,7 +53,7 @@ let keycodes: [Character: Int] = [
 
 /// The user's ezkey settings, put back when the test ends.
 let settings = UserDefaults(suiteName: "io.github.ezkey")!
-let saved = ["Enabled", "Vni", "ModernTone"].map { ($0, settings.object(forKey: $0)) }
+let saved = ["Enabled", "Vni", "ModernTone", "SpellCheck"].map { ($0, settings.object(forKey: $0)) }
 /// The user's abbreviation file, swapped for the test's and put back.
 let abbreviations = FileManager.default
     .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -179,6 +179,7 @@ let target = args.count == 3 ? args[2] : "textedit"
 settings.set(true, forKey: "Enabled")
 settings.set(false, forKey: "Vni")
 settings.set(false, forKey: "ModernTone")
+settings.set(true, forKey: "SpellCheck")
 settings.synchronize()
 let pkill = Process.launchedProcess(launchPath: "/usr/bin/pkill", arguments: ["-x", "ezkey"])
 pkill.waitUntilExit()
