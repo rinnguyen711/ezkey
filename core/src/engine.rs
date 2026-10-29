@@ -118,6 +118,11 @@ impl Engine {
         if let Some(raw) = &mut self.raw {
             raw.push(key);
         }
+        // `thiss` → "this" stays, but a new letter after the undo means a
+        // doubled English letter (`sorry`, `issue`), so the word is checked
+        // again. Repeating the undo key (`asss` → "ass") stays literal.
+        let recheck = self.undone
+            && self.raw.as_ref().is_some_and(|r| r.len() >= 2 && r[r.len() - 2] != key);
         if vni_digit {
             if self.undone || !self.apply_mark(key) {
                 self.reset();
@@ -126,7 +131,7 @@ impl Engine {
         } else {
             self.apply(key);
         }
-        if !self.undone {
+        if !self.undone || recheck {
             self.restore_if_invalid();
         }
         let new = self.render();
@@ -587,6 +592,11 @@ mod tests {
                 ("were", "were"),
                 ("windows", "windows"),
                 ("1s", "1s"),
+                ("sorry", "sorry"),
+                ("issue", "issue"),
+                ("access", "access"),
+                ("ass", "as"),
+                ("thiss", "this"),
             ],
             t,
         );
