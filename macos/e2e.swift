@@ -30,6 +30,8 @@ let cases: [(String, String)] = [
     ("goo", "gô"),
     ("ass aaa ww", "as aa w"),
     ("hello world", "hello world"),
+    ("sorry", "sorry"),
+    ("ko ddc", "không được"),
 ]
 
 /// Milliseconds between key downs, and how long each key is held.
@@ -52,8 +54,22 @@ let keycodes: [Character: Int] = [
 /// The user's ezkey settings, put back when the test ends.
 let settings = UserDefaults(suiteName: "io.github.ezkey")!
 let saved = ["Enabled", "Vni", "ModernTone"].map { ($0, settings.object(forKey: $0)) }
+/// The user's abbreviation file, swapped for the test's and put back.
+let abbreviations = FileManager.default
+    .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    .appendingPathComponent("ezkey/abbreviations.txt")
+let savedAbbreviations = try? Data(contentsOf: abbreviations)
+try? FileManager.default.createDirectory(
+    at: abbreviations.deletingLastPathComponent(), withIntermediateDirectories: true)
+try! "ko=không\nddc=được\n".write(to: abbreviations, atomically: true, encoding: .utf8)
+
 func restore() {
     for (key, value) in saved { settings.set(value, forKey: key) }
+    if let savedAbbreviations {
+        try? savedAbbreviations.write(to: abbreviations)
+    } else {
+        try? FileManager.default.removeItem(at: abbreviations)
+    }
     command(false)
 }
 

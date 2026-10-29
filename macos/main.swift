@@ -96,6 +96,23 @@ final class Ime {
         defaults.set(on, forKey: Setting.vni)
         ezkey_engine_set_vni(engine, on)
     }
+
+    /// `key=value` lines expanded at word end: ko=không.
+    static let abbreviationsURL = FileManager.default
+        .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("ezkey/abbreviations.txt")
+    var abbreviationsDate: Date?
+    var abbreviationsLoaded = false
+
+    /// Reads the abbreviation file again when it changed; one stat per word.
+    func loadAbbreviations() {
+        let url = Ime.abbreviationsURL
+        let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        guard !abbreviationsLoaded || date != abbreviationsDate else { return }
+        abbreviationsLoaded = true
+        abbreviationsDate = date
+        ezkey_engine_set_abbreviations(engine, (try? String(contentsOf: url, encoding: .utf8)) ?? "")
+    }
 }
 
 let ime = Ime()
@@ -272,9 +289,13 @@ func handle(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmana
         return pass
     }
 
-    // Letters, and digits for VNI; the engine ends the word on anything else.
+    // Letters, and digits for VNI; the engine ends the word on anything else,
+    // expanding an abbreviation first.
+    if !(scalar.properties.isAlphabetic || ("0"..."9").contains(scalar)) {
+        ime.loadAbbreviations()
+    }
     var backspaces: UInt32 = 0
-    var out = [UInt32](repeating: 0, count: 64)
+    var out = [UInt32](repeating: 0, count: 256)
     let n = ezkey_engine_process(ime.engine, scalar.value, &backspaces, &out, UInt32(out.count))
     if n < 0 {
         return pass
@@ -322,7 +343,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         telexItem = add("Telex", #selector(chooseTelex))
         vniItem = add("VNI", #selector(chooseVni))
         modernItem = add("Đặt dấu kiểu mới (hoà, thuý)", #selector(toggleModern))
-        spellCheckItem = add("Kiểm tra chính tả (tắt để gõ tắt: đc, đt)", #selector(toggleSpellCheck))
+        spellCheckItem = add("Kiểm tra chính tả", #selector(toggleSpellCheck))
+        _ = add("Sửa từ điển viết tắt…", #selector(editAbbreviations))
         perAppItem = add("Nhớ chế độ V/E theo từng app", #selector(togglePerApp))
         menu.addItem(.separator())
         loginItem = add("Mở cùng máy", #selector(toggleLogin))
@@ -339,6 +361,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ime.activated(app?.bundleIdentifier)
         }
         refresh()
+        ime.loadAbbreviations()
 
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         if AXIsProcessTrustedWithOptions(options) {
@@ -418,6 +441,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func toggleSpellCheck() {
         ime.setSpellCheck(!ime.spellCheck)
         refresh()
+    }
+
+    @objc func editAbbreviations() {
+        let url = Ime.abbreviationsURL
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try? FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? "# ezkey: moi dong mot tu tat, dang tat=day du. Luu file la dung duoc ngay.\nko=không\nddc=được\n"
+                .write(to: url, atomically: true, encoding: .utf8)
+        }
+        NSWorkspace.shared.open(url)
     }
 
     @objc func togglePerApp() {
