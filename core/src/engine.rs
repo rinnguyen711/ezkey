@@ -5,6 +5,8 @@
 //! render. Each key returns the edit needed to turn what is on screen into
 //! the new rendering.
 
+use std::collections::HashMap;
+
 use crate::syllable::{
     circumflex, horn, is_horned, is_valid, parts, plain, split_tone, tone_position, with_tone,
     Tone, ToneStyle,
@@ -51,6 +53,8 @@ pub struct Engine {
     /// Restore the typed keys when the word stops being Vietnamese. Off lets
     /// abbreviations like `ddc` → "đc" through, but `world` → "ưởld".
     spell_check: bool,
+    /// Typed keys → text, expanded at word end (`ko` → "không").
+    abbreviations: HashMap<String, String>,
 }
 
 impl Default for Engine {
@@ -74,11 +78,43 @@ impl Engine {
             style: ToneStyle::Classic,
             method: InputMethod::Telex,
             spell_check: true,
+            abbreviations: HashMap::new(),
         }
     }
 
     pub fn set_spell_check(&mut self, on: bool) {
         self.spell_check = on;
+    }
+
+    /// Loads `key=value` lines; `#` comments, blank and malformed lines are
+    /// skipped. Keys are letters/digits, matched case-insensitively.
+    pub fn set_abbreviations(&mut self, text: &str) {
+        self.abbreviations = text
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .filter_map(|l| l.split_once('='))
+            .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
+            .filter(|(k, v)| {
+                !k.is_empty()
+                    && k.chars().all(|c| c.is_ascii_alphanumeric())
+                    && !v.is_empty()
+                    && v.chars().count() <= 200
+            })
+            .collect();
+    }
+
+    /// The expansion of the word typed so far; `Ko` capitalises it.
+    fn expansion(&self) -> Option<String> {
+        let raw = self.raw.as_ref()?;
+        let typed: String = raw.iter().collect();
+        let value = self.abbreviations.get(&typed.to_ascii_lowercase())?;
+        let mut chars = value.chars();
+        Some(match chars.next() {
+            Some(first) if raw[0].is_ascii_uppercase() => {
+                first.to_uppercase().chain(chars).collect()
+            }
+            _ => value.clone(),
+        })
     }
 
     pub fn set_style(&mut self, style: ToneStyle) {
@@ -112,8 +148,17 @@ impl Engine {
     pub fn process_key(&mut self, key: char) -> Action {
         let vni_digit = self.method == InputMethod::Vni && key.is_ascii_digit();
         if !key.is_ascii_alphabetic() && !vni_digit {
+            let ends_word = key.is_whitespace() || key.is_ascii_punctuation();
+            let expansion = self.expansion().filter(|_| ends_word);
+            let backspaces = self.displayed.len();
             self.reset();
-            return Action::PassThrough;
+            return match expansion {
+                Some(text) => Action::Replace {
+                    backspaces,
+                    text: format!("{text}{key}"),
+                },
+                None => Action::PassThrough,
+            };
         }
         if let Some(raw) = &mut self.raw {
             raw.push(key);
@@ -430,6 +475,35 @@ mod tests {
         e.set_spell_check(false);
         assert_eq!(run(e, "ddc vaayj"), "đc vậy");
         assert_eq!(t("ddc"), "ddc");
+    }
+
+    fn abbr(spell_check: bool, input: &str) -> String {
+        let mut e = Engine::new();
+        e.set_spell_check(spell_check);
+        e.set_abbreviations(
+            "# comment\n\nko=không\nddc = được\nvn=Việt Nam\ntest=test\nbad line\n=x\nk o=y\n",
+        );
+        run(e, input)
+    }
+
+    #[test]
+    fn expands_abbreviations_at_word_end() {
+        check(
+            &[
+                ("ko ", "không "),
+                ("Ko,", "Không,"),
+                ("vn.", "Việt Nam."),
+                ("ddc ", "được "),
+                ("test ", "test "),
+                ("ko", "ko"),
+                ("kox ", "kõ "),
+                ("ko<o ", "ko "),
+                ("koo ", "kô "),
+                ("k o ", "k o "),
+            ],
+            |s| abbr(true, s),
+        );
+        assert_eq!(abbr(false, "ddc "), "được ");
     }
 
     fn vni(input: &str) -> String {
