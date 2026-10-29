@@ -23,5 +23,7 @@ void ezkey_engine_set_modern_style(EzkeyEngine *engine, bool modern);
 void ezkey_engine_set_vni(EzkeyEngine *engine, bool vni);
 /* false keeps marks on words that are not Vietnamese: ddc -> đc */
 void ezkey_engine_set_spell_check(EzkeyEngine *engine, bool on);
+/* Abbreviation file text, UTF-8 "key=value" lines: ko=không */
+void ezkey_engine_set_abbreviations(EzkeyEngine *engine, const char *text);
 
 #endif

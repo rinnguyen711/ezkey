@@ -1,6 +1,8 @@
 //! C ABI for platform shells written in other languages (macOS / Swift).
 //! See `core/include/ezkey.h`.
 
+use std::ffi::{c_char, CStr};
+
 use crate::{Action, Engine, InputMethod, ToneStyle};
 
 #[no_mangle]
@@ -104,4 +106,13 @@ pub unsafe extern "C" fn ezkey_engine_set_vni(engine: *mut Engine, vni: bool) {
 #[no_mangle]
 pub unsafe extern "C" fn ezkey_engine_set_spell_check(engine: *mut Engine, on: bool) {
     (*engine).set_spell_check(on);
+}
+
+/// Loads the abbreviation file's text (UTF-8, `key=value` lines).
+///
+/// # Safety
+/// `engine` must be valid; `text` must be a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn ezkey_engine_set_abbreviations(engine: *mut Engine, text: *const c_char) {
+    (*engine).set_abbreviations(&CStr::from_ptr(text).to_string_lossy());
 }
