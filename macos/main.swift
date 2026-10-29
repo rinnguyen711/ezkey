@@ -16,6 +16,8 @@ enum Setting {
     static let vni = "Vni"
     static let perApp = "PerApp"
     static let spellCheck = "SpellCheck"
+    /// Expand abbreviations from the dictionary file; off keeps them as typed.
+    static let abbreviations = "Abbreviations"
     /// Bundle ID → Vietnamese on, the mode last chosen in each app.
     static let apps = "Apps"
 }
@@ -27,6 +29,7 @@ final class Ime {
     var modern = false
     var vni = false
     var spellCheck = true
+    var abbreviations = true
     /// Remember Vietnamese / English per app.
     var perApp: Bool
     /// Bundle ID of the app the user is typing in.
@@ -42,6 +45,7 @@ final class Ime {
         setModern(defaults.bool(forKey: Setting.modern))
         setVni(defaults.bool(forKey: Setting.vni))
         setSpellCheck(defaults.object(forKey: Setting.spellCheck) as? Bool ?? true)
+        abbreviations = defaults.object(forKey: Setting.abbreviations) as? Bool ?? true
     }
 
     func toggle() {
@@ -104,6 +108,13 @@ final class Ime {
     var abbreviationsDate: Date?
     var abbreviationsLoaded = false
 
+    func setAbbreviations(_ on: Bool) {
+        abbreviations = on
+        defaults.set(on, forKey: Setting.abbreviations)
+        abbreviationsLoaded = false
+        loadAbbreviations()
+    }
+
     /// Reads the abbreviation file again when it changed; one stat per word.
     func loadAbbreviations() {
         let url = Ime.abbreviationsURL
@@ -111,7 +122,8 @@ final class Ime {
         guard !abbreviationsLoaded || date != abbreviationsDate else { return }
         abbreviationsLoaded = true
         abbreviationsDate = date
-        ezkey_engine_set_abbreviations(engine, (try? String(contentsOf: url, encoding: .utf8)) ?? "")
+        let text = abbreviations ? (try? String(contentsOf: url, encoding: .utf8)) : nil
+        ezkey_engine_set_abbreviations(engine, text ?? "")
     }
 }
 
@@ -326,6 +338,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var modernItem: NSMenuItem!
     var perAppItem: NSMenuItem!
     var spellCheckItem: NSMenuItem!
+    var abbreviationsItem: NSMenuItem!
     var loginItem: NSMenuItem!
     var permissionTimer: Timer?
 
@@ -344,6 +357,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         vniItem = add("VNI", #selector(chooseVni))
         modernItem = add("Đặt dấu kiểu mới (hoà, thuý)", #selector(toggleModern))
         spellCheckItem = add("Kiểm tra chính tả", #selector(toggleSpellCheck))
+        abbreviationsItem = add("Gõ tắt theo từ điển", #selector(toggleAbbreviations))
         _ = add("Sửa từ điển viết tắt…", #selector(editAbbreviations))
         perAppItem = add("Nhớ chế độ V/E theo từng app", #selector(togglePerApp))
         menu.addItem(.separator())
@@ -419,6 +433,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         modernItem.state = ime.modern ? .on : .off
         perAppItem.state = ime.perApp ? .on : .off
         spellCheckItem.state = ime.spellCheck ? .on : .off
+        abbreviationsItem.state = ime.abbreviations ? .on : .off
         if #available(macOS 13, *) {
             loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         }
@@ -440,6 +455,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func toggleSpellCheck() {
         ime.setSpellCheck(!ime.spellCheck)
+        refresh()
+    }
+
+    @objc func toggleAbbreviations() {
+        ime.setAbbreviations(!ime.abbreviations)
         refresh()
     }
 

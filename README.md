@@ -40,7 +40,7 @@ Gõ lặp số để huỷ: `a11` → a1. Số đứng một mình vẫn là s�
 
 - Có hai kiểu đặt dấu: cũ (hòa, thúy, mặc định) và mới (hoà, thuý).
 - **Kiểm tra chính tả** (macOS, bật sẵn): tắt trong menu để gõ tắt như `ddc` → đc. Khi tắt, từ tiếng Anh cũng bị thêm dấu: `world` → ưởld.
-- **Từ điển viết tắt** (macOS): menu **Sửa từ điển viết tắt…** mở file `~/Library/Application Support/ezkey/abbreviations.txt`. Mỗi dòng một từ, dạng `tắt=đầy đủ`, ví dụ `ko=không`, `ddc=được`. Gõ từ tắt rồi dấu cách, Enter hoặc dấu câu thì ezkey thay bằng từ đầy đủ; `Ko` → Không. Chỉ có tác dụng ở chế độ V, dù kiểm tra chính tả bật hay tắt. Lưu file là dùng được ngay. Cũng dùng được để giữ nguyên từ tiếng Anh bị thêm dấu: `test=test`.
+- **Từ điển viết tắt** (macOS): menu **Sửa từ điển viết tắt…** mở file `~/Library/Application Support/ezkey/abbreviations.txt`. Mỗi dòng một từ, dạng `tắt=đầy đủ`, ví dụ `ko=không`, `ddc=được`. Gõ từ tắt rồi dấu cách, Enter hoặc dấu câu thì ezkey thay bằng từ đầy đủ; `Ko` → Không. Chỉ có tác dụng ở chế độ V, dù kiểm tra chính tả bật hay tắt. Lưu file là dùng được ngay. Muốn giữ nguyên từ tắt như đã gõ thì bỏ chọn **Gõ tắt theo từ điển** trong menu. Cũng dùng được để giữ nguyên từ tiếng Anh bị thêm dấu: `test=test`.
 - **Ctrl+Shift** bật/tắt tiếng Việt. Trên Windows, vào menu **Phím tắt bật/tắt** để:
   - chọn **Alt+Z**, hoặc tắt hẳn phím tắt;
   - chọn **Đặt phím tắt khác…** rồi nhấn tổ hợp bạn muốn, ví dụ Ctrl+Alt+V, Ctrl+Space, Ctrl+Alt hoặc F9. Nhấn Esc để huỷ. Nếu không nhấn gì trong 10 giây, ezkey tự huỷ.
